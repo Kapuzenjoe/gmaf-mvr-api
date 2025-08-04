@@ -18,6 +18,9 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.file.Files;
 import java.util.*;
 
 /**
@@ -42,14 +45,14 @@ public class GMAF_Facade_RESTImpl {
 		return uuid;
 	}
 
-
 	/**
 	 * returns a Graph Code for a given MMFG
 	 **/
 	@POST
 	@Path("/getgc/{auth-token}/{mmfg_id}")
 	@Produces("application/json")
-	public String getOrGenerateGraphCode(@PathParam("auth-token") String auth_token, @PathParam("mmfg_id") String mmfg_id) {
+	public String getOrGenerateGraphCode(@PathParam("auth-token") String auth_token,
+			@PathParam("mmfg_id") String mmfg_id) {
 		System.out.println("getGc " + mmfg_id);
 		MMFGCollection coll = MMFGCollection.getInstance(auth_token);
 		UUID id = UUID.fromString(mmfg_id);
@@ -88,8 +91,10 @@ public class GMAF_Facade_RESTImpl {
 	@Path("/{session}/{api-key}")
 	@Produces("application/json")
 	public GMAF getSession(@PathParam("api-key") String api_key) {
-		if (sessions.contains(api_key)) return sessions.get(api_key);
-		else throw new RuntimeException("no valid API key");
+		if (sessions.contains(api_key))
+			return sessions.get(api_key);
+		else
+			throw new RuntimeException("no valid API key");
 	}
 
 	/**
@@ -133,6 +138,97 @@ public class GMAF_Facade_RESTImpl {
 		return res;
 	}
 
+
+	@GET
+	@Path("/file/{auth-token}/{id}")
+	@Produces({ "application/octet-stream" })
+	@WebMethod
+	public Response getFileForItem(
+			@PathParam("auth-token") String auth_token,
+			@PathParam("id") String mmfg_id,
+			@HeaderParam("Range") String rangeHeader) {
+
+		System.out.println("getFile " + mmfg_id);
+		MMFGCollection coll = MMFGCollection.getInstance(auth_token);
+		UUID id = UUID.fromString(mmfg_id);
+		MMFG mmfg = coll.getMMFGForId(id);
+
+		if (mmfg == null) {
+			return Response.status(Response.Status.NOT_FOUND).build();
+		}
+
+		File file = mmfg.getGeneralMetadata().getFileReference();
+
+		if (file == null || !file.exists()) {
+			System.out.println("-> not found");
+			return Response.status(Response.Status.NOT_FOUND).build();
+		}
+
+		String type;
+		try {
+			type = Files.probeContentType(file.toPath());
+			if (type == null) {
+				type = "application/octet-stream";
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+			type = "application/octet-stream";
+		}
+
+		long fileLength = file.length();
+		long start = 0;
+		long end = fileLength - 1;
+
+		if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+			// Parse Range Header
+			String[] ranges = rangeHeader.substring("bytes=".length()).split("-");
+			try {
+				start = Long.parseLong(ranges[0]);
+				if (ranges.length > 1 && !ranges[1].isEmpty()) {
+					end = Long.parseLong(ranges[1]);
+				}
+			} catch (NumberFormatException e) {
+				start = 0;
+				end = fileLength - 1;
+			}
+
+			// Check boundaries
+			if (end > fileLength - 1) {
+				end = fileLength - 1;
+			}
+			if (start > end) {
+				start = 0;
+				end = fileLength - 1;
+			}
+
+			long contentLength = end - start + 1;
+
+			try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+				raf.seek(start);
+				byte[] data = new byte[(int) contentLength];
+				raf.readFully(data);
+
+				return Response.status(Response.Status.PARTIAL_CONTENT)
+						.header("Content-Type", type)
+						.header("Accept-Ranges", "bytes")
+						.header("Content-Length", contentLength)
+						.header("Content-Range", "bytes " + start + "-" + end + "/" + fileLength)
+						.header("Content-Disposition", "inline; filename=\"" + file.getName() + "\"")
+						.entity(data)
+						.build();
+			} catch (IOException e) {
+				e.printStackTrace();
+				return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
+			}
+		} else {
+			// Kein Range Header -> ganze Datei senden
+			return Response.ok(file, type)
+					.header("Accept-Ranges", "bytes")
+					.header("Content-Disposition", "inline; filename=\"" + file.getName() + "\"")
+					.build();
+		}
+	}
+
 	/**
 	 * returns image-URL as String
 	 **/
@@ -146,7 +242,6 @@ public class GMAF_Facade_RESTImpl {
 		MMFG mmfg = coll.getMMFGForId(id);
 		return mmfg.getGeneralMetadata().getPreviewUrl().toString();
 	}
-
 
 	/**
 	 * returns a list of similar assets for a given Graph Code
@@ -170,7 +265,8 @@ public class GMAF_Facade_RESTImpl {
 	@Path("/getRec/{auth-token}/{id}")
 	@Produces("application/json")
 	@WebMethod
-	public Vector<MMFG> getRecommendedAssets(@PathParam("auth-token") String auth_token, @PathParam("id") String mmfg_id) {
+	public Vector<MMFG> getRecommendedAssets(@PathParam("auth-token") String auth_token,
+			@PathParam("id") String mmfg_id) {
 		MMFGCollection coll = MMFGCollection.getInstance(auth_token);
 		UUID id = UUID.fromString(mmfg_id);
 		MMFG mmfg = coll.getMMFGForId(id);
@@ -186,9 +282,10 @@ public class GMAF_Facade_RESTImpl {
 		GraphCode gc = new GraphCode();
 		Vector<String> dict = new Vector<String>();
 		keywords = keywords.replace(";", ",");
-		//keywords = keywords.replace(" ", ",");
+		// keywords = keywords.replace(" ", ",");
 		String[] str = keywords.split(",");
-		for (String s : str) dict.add(s.trim());
+		for (String s : str)
+			dict.add(s.trim());
 		gc.setDictionary(dict);
 
 		System.out.println("query by keyword " + keywords + " with token " + auth_token);
@@ -203,7 +300,8 @@ public class GMAF_Facade_RESTImpl {
 
 			if (ids.size() == 0) {
 				Vector<MMFG> mmfgs = MMFGCollection.getInstance(auth_token).getCollection();
-				for (MMFG m : mmfgs) ids.add(m.getId().toString());
+				for (MMFG m : mmfgs)
+					ids.add(m.getId().toString());
 			}
 
 			System.out.println("found " + ids.size() + " results");
@@ -234,7 +332,6 @@ public class GMAF_Facade_RESTImpl {
 		return str;
 	}
 
-
 	/**
 	 * returns Metadata for collection items
 	 **/
@@ -252,89 +349,120 @@ public class GMAF_Facade_RESTImpl {
 		return str;
 	}
 	/*
+	 *//** processes an asset with the GMAF Core and returns the calculated MMFG **/
+	/*
+	 * public MMFG processAsset(String auth_token, @FormParam("file") File f) {
+	 * try {
+	 * return getSession(auth_token).processAsset(f);
+	 * }
+	 * catch (Exception x) {
+	 * x.printStackTrace();
+	 * errorMessages.put(auth_token, x.getMessage());
+	 * }
+	 * return null;
+	 * }
+	 * 
+	 *//** processes an asset with the GMAF Core and returns the calculated MMFG **/
+	/*
+	 * @WebMethod public MMFG processAsset(String auth_token, byte[] bytes, String
+	 * suffix) {
+	 * try {
+	 * File f = File.createTempFile("gmaf", suffix);
+	 * FileOutputStream fout = new FileOutputStream(f);
+	 * fout.write(bytes);
+	 * fout.flush();
+	 * fout.close();
+	 * return getSession(auth_token).processAsset(f);
+	 * }
+	 * catch (Exception x) {
+	 * x.printStackTrace();
+	 * errorMessages.put(auth_token, x.getMessage());
+	 * }
+	 * return null;
+	 * }
+	 * 
 	 *//** processes an asset with the GMAF Core and returns the calculated MMFG **//*
-	public MMFG processAsset(String auth_token, @FormParam("file") File f) {
-		try {
-			return getSession(auth_token).processAsset(f);
-		}
-		catch (Exception x) {
-			x.printStackTrace();
-			errorMessages.put(auth_token, x.getMessage());
-		}
-		return null;
-	}
-
-	*//** processes an asset with the GMAF Core and returns the calculated MMFG **//*
-	@WebMethod public MMFG processAsset(String auth_token, byte[] bytes, String suffix) {
-		try {
-			File f = File.createTempFile("gmaf", suffix);
-			FileOutputStream fout = new FileOutputStream(f);
-			fout.write(bytes);
-			fout.flush();
-			fout.close();
-			return getSession(auth_token).processAsset(f);
-		}
-		catch (Exception x) {
-			x.printStackTrace();
-			errorMessages.put(auth_token, x.getMessage());
-		}
-		return null;
-	}
-
-	*//** processes an asset with the GMAF Core and returns the calculated MMFG **//*
-	@POST
-    @Path("/{process-asset}/{mmfg}")
-	@Produces("application/json")
-	public MMFG processAsset(@PathParam("auth-token") String auth_token, @PathParam("url") String surl) {
-		try {
-			URL url = new URL(surl);
-			URLConnection uc = url.openConnection();
-			byte[] bytes = uc.getInputStream().readAllBytes();
-			String suffix = url.toString();
-			suffix = suffix.substring(suffix.lastIndexOf(".") + 1, suffix.length());
-			return processAsset(auth_token, bytes, suffix);
-		}
-		catch (Exception x) {
-			x.printStackTrace();
-			errorMessages.put(auth_token, x.getMessage());
-		}
-		return null;
-	}
-
-	*/
+																					 * @POST
+																					 * 
+																					 * @Path("/{process-asset}/{mmfg}")
+																					 * 
+																					 * @Produces("application/json")
+																					 * public MMFG
+																					 * processAsset(@PathParam(
+																					 * "auth-token") String
+																					 * auth_token, @PathParam("url")
+																					 * String surl) {
+																					 * try {
+																					 * URL url = new URL(surl);
+																					 * URLConnection uc =
+																					 * url.openConnection();
+																					 * byte[] bytes =
+																					 * uc.getInputStream().readAllBytes(
+																					 * );
+																					 * String suffix = url.toString();
+																					 * suffix = suffix.substring(suffix.
+																					 * lastIndexOf(".") + 1,
+																					 * suffix.length());
+																					 * return processAsset(auth_token,
+																					 * bytes, suffix);
+																					 * }
+																					 * catch (Exception x) {
+																					 * x.printStackTrace();
+																					 * errorMessages.put(auth_token,
+																					 * x.getMessage());
+																					 * }
+																					 * return null;
+																					 * }
+																					 * 
+																					 */
 
 	/**
 	 * sets the classes of the processing plugins (optional)
 	 **//*
-	@WebMethod public void setProcessingPlugins(String auth_token, Vector<String> plugins) {
-		getSession(auth_token).setProcessingPlugins(plugins);
-	}                                                                      */
-	                                 /*
-	@POST
-	@Path("/query-by-example")
-	@Produces("application/json")
-	@WebMethod public String[] queryByExample(@PathParam("auth-token") String auth_token, @PathParam("mmfg-id") String mmfg_id) {
-		QueryByExampleCommand qbe = new QueryByExampleCommand(mmfg_id, auth_token);
-		qbe.execute();
-		return getCollectionIds(auth_token);
-	}
-
-	@POST
-	@Path("/{query-by-sparql}")
-	@Produces("application/json")
-	@WebMethod public String[] queryBySPARQL(@PathParam("auth-token") String auth_token, @PathParam("query") String query) {
-		QueryBySPARQLCommand qbs = new QueryBySPARQLCommand(query);
-		qbs.setSessionId(auth_token);
-		qbs.execute();
-		return getCollectionIds(auth_token);
-	}
-
-	@POST
-    @Path("/{get-last-error}")
-	@Produces("application/json")
-	@WebMethod public String getLastError(@PathParam("auth-token") String auth_token) {
-		return errorMessages.get(auth_token);
-	}*/
+		 * @WebMethod public void setProcessingPlugins(String auth_token, Vector<String>
+		 * plugins) {
+		 * getSession(auth_token).setProcessingPlugins(plugins);
+		 * }
+		 */
+	/*
+	 * @POST
+	 * 
+	 * @Path("/query-by-example")
+	 * 
+	 * @Produces("application/json")
+	 * 
+	 * @WebMethod public String[] queryByExample(@PathParam("auth-token") String
+	 * auth_token, @PathParam("mmfg-id") String mmfg_id) {
+	 * QueryByExampleCommand qbe = new QueryByExampleCommand(mmfg_id, auth_token);
+	 * qbe.execute();
+	 * return getCollectionIds(auth_token);
+	 * }
+	 * 
+	 * @POST
+	 * 
+	 * @Path("/{query-by-sparql}")
+	 * 
+	 * @Produces("application/json")
+	 * 
+	 * @WebMethod public String[] queryBySPARQL(@PathParam("auth-token") String
+	 * auth_token, @PathParam("query") String query) {
+	 * QueryBySPARQLCommand qbs = new QueryBySPARQLCommand(query);
+	 * qbs.setSessionId(auth_token);
+	 * qbs.execute();
+	 * return getCollectionIds(auth_token);
+	 * }
+	 * 
+	 * @POST
+	 * 
+	 * @Path("/{get-last-error}")
+	 * 
+	 * @Produces("application/json")
+	 * 
+	 * @WebMethod public String getLastError(@PathParam("auth-token") String
+	 * auth_token) {
+	 * return errorMessages.get(auth_token);
+	 * }
+	 */
 	@POST
 	@Path("/test")
 	@Produces("application/json")
@@ -343,6 +471,7 @@ public class GMAF_Facade_RESTImpl {
 		System.out.println("Called Test, return stuff");
 		return "test";
 	}
+
 	@GET
 	@Path("/test")
 	@Produces("application/json")
@@ -351,7 +480,6 @@ public class GMAF_Facade_RESTImpl {
 		System.out.println("Called Test, return stuff");
 		return "test";
 	}
-
 
 	@POST
 	@Path("/getsimilarassetsbygraphcode/{auth-token}")
@@ -386,7 +514,7 @@ public class GMAF_Facade_RESTImpl {
 		results.getResultVars().toArray(header);
 		ArrayList<ArrayList> tempData = new ArrayList<ArrayList>();
 
-		for (; results.hasNext(); ) {
+		for (; results.hasNext();) {
 			QuerySolution soln = results.nextSolution();
 			ArrayList row = new ArrayList();
 			for (int i = 0; i < colNum; i++) {
@@ -401,7 +529,7 @@ public class GMAF_Facade_RESTImpl {
 		String[] str = new String[rowNum];
 		for (int i = 0; i < rowNum; i++) {
 			for (int j = 0; j < colNum; j++) {
-				//data[i][j] = tempData.get(i).get(j)
+				// data[i][j] = tempData.get(i).get(j)
 				System.out.println(tempData.get(i).get(j));
 				String f = tempData.get(i).get(j).toString();
 				String[] xf = f.split("/");
